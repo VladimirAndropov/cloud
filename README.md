@@ -1,105 +1,156 @@
-# Tarantool Cloud
+########################################
+## Part 1 - окружение и Инсталляция  ###
+########################################
+> Перечислить IP-адреса виртуальных машин и установленную ОС. 
+> Предоставить bash-скрипт, который нужно выполнить на host-машине, 
+> чтобы запустить облако.
+     
+    echo 'смотрим окружение'   
+    lsb_release -a
 
-Tarantool Cloud is a service that allows you to run a self-healing, replicated set of tarantool instances. It is built on top of Consul and is resilient to some of the typical hardware and network problems.
+>  'мой-хост№1: Ubuntu 14.04.5 LTS (GNU/Linux 3.13.0-110-generic x86_64)'
 
-It provides the following key features:
+    echo 'запоминаем ip:'
+    hostname --all-ip-addresses
+> 'ip моего хоста: IP address for eth0: 90.156.141.158'
 
-- **REST API**: for programmatic creation and destruction of tarantool instances
-- **WEB UI**: to allow human agents create single on-demand instances and get an overview of the system
-- **Failover**: to automatically recover from node failures or degraded storage
+    echo 'Ставим docker из репозитария'
+    sudo apt-get -y install docker-engine
 
-Read more on the wiki: [Documentation](https://github.com/tarantool/cloud/wiki)
+    echo 'Ставим docker composer'
+    cd /opt
+    sudo curl -L "https://github.com/docker/compose/releases/download/1.11.1/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
 
-## Getting Started
+    echo 'Клонируем репозиторий для теста '
+    cd /opt
+    sudo git clone https://github.com/tarantool/cloud.git
 
-To prepare an environment, do:
 
-```sh
-docker-compose up
-```
+##################################
+##Part2 - check ##
+##################################
+> Как убедиться, что облако работает? Например, зайти по такому-то адресу, посмотреть в лог и пр.
 
-Then go to [http://localhost:5061](http://localhost:5061) to access web UI.
+    echo 'Посмотрим запущенные контейнеры, занятые порты, и ошибки docker'
+    docker ps | grep tarantool-cloud
+    netstat -apn| grep LISTENING
+    cat /var/log/upstart/docker.log | grep error
+     
+    echo 'Запустилась ли web UI?'
+    curl -v http://localhost:5061
+    
+    echo 'Смотрим в браузере: http://localhost:5061 '
+    lynx http://localhost:5061'
 
-*Note*: first-time creation and launch of tarantool instances may take a long time, as the instance manager is building docker images.
 
-## Managing Tarantool instances via command-line client
+############################
+## Part 3 - первый хост 90.156.141.158  ##
+############################
 
-### Create new instance:
+>  Предоставить bash-скрипт, который через CLI (taas)
+> создает одну логическую ноду в кластере, 
+> коннектится к ней, 
+> создает в ней space и 
+> делает три любых записи
 
-```sh
-./taas -H localhost:5061 run --name myinstance 0.3
-```
 
-This will create an instance named `myinstance`, with 0.3 GiB memory limit and return its ID.
 
-### List instances:
+  
 
-```sh
-./taas -H localhost:5061 ps
-```
+**Запускаем *tarantool* и создaем кластер *GE* с пользователем *replicator***
 
-It will produce output like this:
 
-```sh
-GROUP                             INSTANCE #     NAME        TYPE       SIZE     STATE     ADDRESS       NODE
-37c82b4a32344b0cae1143b5d017b204  2              myinstance  memcached  0.3      Down      172.55.128.3  docker1
-37c82b4a32344b0cae1143b5d017b204  1              myinstance  memcached  0.3      Down      172.55.128.2  docker1
-```
 
-### Inspect an instance
+    box.cfg{listen = 3301,
+    logger = docker.log}
+    
+    box.schema.user.create('replicator', {password = 'password'})
+    box.schema.user.grant('replicator','execute','role','replication')
+    box.space._cluster:select({0}, {iterator = 'GE'})
 
-This is a command that shows low-level details about an instance. Make sure to put your own instance ID instead of `37c82b4a32344b0cae1143b5d017b204`
 
-```sh
-./taas -H localhost:5061 inspect 37c82b4a32344b0cae1143b5d017b204
-```
 
-Will show output like this:
+#######################
+#Part 3 -второй хост 172.31.27.169##
+#######################
 
-``` bash
-[
-  {
-    "id": "37c82b4a32344b0cae1143b5d017b204",
-    "creation_time": "2016-08-16T13:30:24.827509+00:00",
-    "name": "myinstance",
-    "type": "memcached",
-    "memsize": 0.3,
-    "instances": [
-      ...
-    ],
-    ...
-  }
-]
-```
+>  подключаем хост2 *ip=172.31.27.169* в кластер и настраиваем репликацию  
 
-### Remove an instance
+    box.cfg{
+      listen = 3302,
+      logger = docker.log,
+      replication_source = 'replicator:password@90.156.141.158:3301'
+    }
+    box.space._cluster:select({0}, {iterator = 'GE'})
 
-Make sure to put your own instance ID instead of `37c82b4a32344b0cae1143b5d017b204`
+Должен появиться id (sha256) первого хоста
 
-```sh
-./taas -H localhost:5061 rm 37c82b4a32344b0cae1143b5d017b204
-```
+#######################
+#Part 4 -Replication ##
+#######################
 
-On success, returns nothing.
 
-### Rename/Resize an instance
+> Результаты host1:cmd3 и host2:cmd3 должны совпадать и должны быть такими-то
 
-Make sure to put your own instance ID instead of `37c82b4a32344b0cae1143b5d017b204`
 
-``` bash
-./taas -H localhost:5061 update --memsize 1.2 --name newname 37c82b4a32344b0cae1143b5d017b204
-```
 
-This will set memory limit to 1.2 GiB and rename instance to 'newname'.
+**проверим репликацию введя некоторые данные в tarantool:**
 
-## Creating Tarantool instances via REST API
 
-```sh
-curl -X POST -F 'name=myinstance' -F 'memsize=0.2' localhost:5061/api/groups
-```
 
-This will create an instance named `myinstance`, with 0.2 GiB memory limit.
+    host1:box.schema.space.create('tarantools')
+    host1:box.space.tarantools:create_index('primary', {type = 'tree', parts = {1, 'UNSIGNED'}})
+    host1:box.space.tarantools.select(box.space.tarantools,{})
+    
+    host1:box.space.tarantools:auto_increment{'Lycosa', 'Lycosa anclata'}
+    
+    host2:box.space.tarantools:auto_increment{'Lycosa', 'Lycosa accurata'}
+    
+    host1:box.space.tarantools:select{}
+ должны высветится два элемента 
 
-## License
+##################
+#Part 5 -хост 3 ##
+##################
+> Добавить третью виртуальную машину в кластер. Назовем её host3
 
-BSD (see LICENSE file)
+
+    box.cfg{ listen = 3302,
+    	logger = docker.log,
+    	replication_source = {replicator:password@90.156.141.158:3301}, {replicator:password@172.31.27.169:3302} }
+    box.space._cluster:select({0}, {iterator = 'GE'})
+
+##################
+#Part 6 - логи  ##
+##################
+
+    find -f docker.log
+
+
+########################
+#Part 7 создаем ноду ##
+########################
+>  'создаем ноду'
+
+    ./taas -H localhost:5061 run --name myinstance
+
+
+----------
+
+
+# Полезные Комманды: #
+    docker run --name mytarantool -d tarantool/tarantool:1.7
+     docker run --name wtf -d -p 3302:3301 -v /opt/cloud/data:/var/lib/tarantool tarantool/tarantool
+
+    export TARANTOOL_CLOUD_HOST=localhost:5061
+    
+    echo 'working instances:'
+    ./taas  -H localhost:5061 ps
+    
+    echo 'create group'
+    ./taas -H localhost:5061 run
+
+
+#Баг  в taas
+> too many attemts if not connected to docker
